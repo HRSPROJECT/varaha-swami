@@ -1,0 +1,7 @@
+{
+  "name": "Varaha Swami Food Delivery",
+  "description": "A comprehensive PWA for Varaha Swami restaurant, enabling customers to order, owners to manage, and delivery personnel to deliver food efficiently with real-time tracking.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
