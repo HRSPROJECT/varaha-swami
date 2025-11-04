@@ -36,7 +36,7 @@ interface MapProps {
   duration?: number | null;
 }
 
-const Map: React.FC<MapProps> = ({ restaurantLoc, customerLoc, deliveryLoc, routePath, distance, duration }) => {
+const MapComponent: React.FC<MapProps> = ({ restaurantLoc, customerLoc, deliveryLoc, routePath, distance, duration }) => {
     // Memoize bounds calculation for performance
     const bounds = useMemo(() => {
         const allPoints: L.LatLngExpression[] = [
@@ -114,4 +114,4 @@ const Map: React.FC<MapProps> = ({ restaurantLoc, customerLoc, deliveryLoc, rout
 };
 
 
-export default Map;
+export default MapComponent;

@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
 import { MenuItem, Order, CartItem, OrderType, OrderStatus, Profile, PromotionalBanner } from '../../types';
 import { haversineDistance, formatCurrency, getRoute } from '../../lib/utils';
-import Map from '../shared/Map';
+import MapComponent from '../shared/Map';
 import BannerSlider from '../shared/BannerSlider';
 import toast from 'react-hot-toast';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -98,10 +98,6 @@ const CustomerView: React.FC = () => {
                         // If accuracy is poor (>50m) and we haven't reached max attempts, try again
                         if (accuracy > 50 && attemptCount < maxAttempts) {
                             console.warn(`⚠️ Poor accuracy (${accuracy}m), retrying...`);
-                            toast(`🎯 Improving GPS accuracy... (${attemptCount}/${maxAttempts})`, {
-                                icon: '🎯',
-                                duration: 2000
-                            });
                             setTimeout(getAccurateLocation, 1000);
                             return;
                         }
@@ -150,13 +146,9 @@ const CustomerView: React.FC = () => {
                                 });
                             }
                             
-                            // Show accuracy warning if GPS is poor
+                            // Show accuracy warning if GPS is poor (only in console)
                             if (accuracy > 50) {
                                 console.warn(`⚠️ GPS accuracy: ±${accuracy}m`);
-                                toast(`⚠️ GPS accuracy: ±${Math.round(accuracy)}m`, { 
-                                    icon: '⚠️',
-                                    duration: 3000 
-                                });
                             }
                         } catch (error) {
                             console.error('❌ Route calculation error:', error);
@@ -575,13 +567,22 @@ const CustomerView: React.FC = () => {
                     </div>
                 </div>
                 <div className="flex-grow rounded-xl overflow-hidden">
-                    <Map 
-                        restaurantLoc={shopLocation} 
-                        customerLoc={customerLocation}
-                        routePath={routeGeometry}
-                        distance={distance}
-                        duration={duration}
-                    />
+                    <React.Suspense fallback={
+                        <div className="flex items-center justify-center h-full bg-gray-100 rounded-xl">
+                            <div className="text-center">
+                                <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
+                                <p className="text-gray-600">Loading map...</p>
+                            </div>
+                        </div>
+                    }>
+                        <MapComponent 
+                            restaurantLoc={shopLocation} 
+                            customerLoc={customerLocation}
+                            routePath={routeGeometry}
+                            distance={distance}
+                            duration={duration}
+                        />
+                    </React.Suspense>
                 </div>
             </div>
         );
