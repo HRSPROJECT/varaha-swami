@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
-import { MenuItem, Order, CartItem, OrderType, OrderStatus, Profile, PromotionalBanner } from '../../types';
+import { MenuItem, Order, CartItem, OrderType, OrderStatus, Profile, PromotionalBanner, OrderRating, RestaurantContact } from '../../types';
 import { haversineDistance, formatCurrency, getRoute } from '../../lib/utils';
 import MapComponent from '../shared/Map';
 import BannerSlider from '../shared/BannerSlider';
+import RatingModal from '../shared/RatingModal';
 import toast from 'react-hot-toast';
 import { AnimatePresence, motion } from 'framer-motion';
 
@@ -48,6 +49,16 @@ const CustomerView: React.FC = () => {
         landmark: '',
         phone: ''
     });
+
+    // Rating modal state
+    const [showRatingModal, setShowRatingModal] = useState(false);
+    const [selectedOrderForRating, setSelectedOrderForRating] = useState<Order | null>(null);
+
+    // Suggestion state
+    const [suggestionText, setSuggestionText] = useState('');
+
+    // Contact info state
+    const [contactInfo, setContactInfo] = useState<RestaurantContact | null>(null);
 
     // Load saved address details on mount
     useEffect(() => {
@@ -280,7 +291,7 @@ const CustomerView: React.FC = () => {
         setLoadingOrders(true);
         const { data, error } = await supabase
             .from('orders')
-            .select(`*, order_items(*, menu_items(*)), delivery_boy_profile:profiles!orders_delivery_boy_id_fkey(*)`)
+            .select(`*, order_items(*, menu_items(*)), delivery_boy_profile:profiles!orders_delivery_boy_id_fkey(*), rating:order_ratings(*)`)
             .eq('customer_id', user.id)
             .order('created_at', { ascending: false })
             .limit(10); // Only fetch last 10 orders
@@ -292,6 +303,61 @@ const CustomerView: React.FC = () => {
         }
         setLoadingOrders(false);
     }, [user]);
+
+    // Rating functions
+    const openRatingModal = (order: Order) => {
+        setSelectedOrderForRating(order);
+        setShowRatingModal(true);
+    };
+
+    const handleRatingSubmitted = (rating: OrderRating) => {
+        setOrders(prev => prev.map(order => 
+            order.id === rating.order_id 
+                ? { ...order, rating: [rating] }
+                : order
+        ));
+        setShowRatingModal(false);
+        setSelectedOrderForRating(null);
+    };
+
+    // Submit suggestion
+    const submitSuggestion = async () => {
+        if (!suggestionText.trim() || !user || !profile) {
+            toast.error('Please enter a suggestion');
+            return;
+        }
+
+        try {
+            const { error } = await supabase
+                .from('customer_suggestions')
+                .insert({
+                    customer_id: user.id,
+                    suggestion_text: suggestionText.trim(),
+                    customer_name: profile.full_name || 'Anonymous'
+                });
+
+            if (error) throw error;
+
+            toast.success('Suggestion submitted! Thank you for your feedback.');
+            setSuggestionText('');
+        } catch (error) {
+            console.error('Error submitting suggestion:', error);
+            toast.error('Failed to submit suggestion');
+        }
+    };
+
+    // Fetch contact info
+    const fetchContactInfo = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('restaurant_contact')
+            .select('*')
+            .eq('is_active', true)
+            .single();
+
+        if (!error && data) {
+            setContactInfo(data);
+        }
+    }, []);
 
     // Filter menu based on search and category
     useEffect(() => {
@@ -317,7 +383,8 @@ const CustomerView: React.FC = () => {
         fetchMenu();
         fetchBanners();
         fetchFrequentItems();
-    }, [fetchMenu, fetchBanners, fetchFrequentItems]);
+        fetchContactInfo();
+    }, [fetchMenu, fetchBanners, fetchFrequentItems, fetchContactInfo]);
 
     // Only fetch orders when switching to orders tab
     useEffect(() => {
@@ -993,6 +1060,94 @@ const CustomerView: React.FC = () => {
                                 </button>
                             </div>
                         </div>
+
+                        {/* Suggestion Box */}
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <h3 className="text-xl font-semibold mb-4">💡 Share Your Suggestions</h3>
+                            <div className="space-y-4">
+                                <textarea
+                                    value={suggestionText}
+                                    onChange={(e) => setSuggestionText(e.target.value)}
+                                    placeholder="Help us improve! Share your suggestions, feedback, or ideas..."
+                                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 resize-none"
+                                    rows={4}
+                                />
+                                <button
+                                    onClick={submitSuggestion}
+                                    disabled={!suggestionText.trim()}
+                                    className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Submit Suggestion
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Help & Contact Section */}
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <h3 className="text-xl font-semibold mb-4">📞 Need Help?</h3>
+                            {contactInfo ? (
+                                <div className="space-y-3">
+                                    {contactInfo.phone_number && (
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-blue-600">📞</span>
+                                            <div>
+                                                <p className="font-medium">Call Us</p>
+                                                <a href={`tel:${contactInfo.phone_number}`} className="text-blue-600 hover:underline">
+                                                    {contactInfo.phone_number}
+                                                </a>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {contactInfo.whatsapp_number && (
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-green-600">💬</span>
+                                            <div>
+                                                <p className="font-medium">WhatsApp</p>
+                                                <a 
+                                                    href={`https://wa.me/${contactInfo.whatsapp_number.replace(/[^0-9]/g, '')}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="text-green-600 hover:underline"
+                                                >
+                                                    {contactInfo.whatsapp_number}
+                                                </a>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {contactInfo.email && (
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-red-600">✉️</span>
+                                            <div>
+                                                <p className="font-medium">Email</p>
+                                                <a href={`mailto:${contactInfo.email}`} className="text-red-600 hover:underline">
+                                                    {contactInfo.email}
+                                                </a>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {contactInfo.working_hours && (
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-orange-600">🕒</span>
+                                            <div>
+                                                <p className="font-medium">Working Hours</p>
+                                                <p className="text-gray-600">{contactInfo.working_hours}</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {contactInfo.address && (
+                                        <div className="flex items-center gap-3">
+                                            <span className="text-purple-600">📍</span>
+                                            <div>
+                                                <p className="font-medium">Address</p>
+                                                <p className="text-gray-600">{contactInfo.address}</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <p className="text-gray-500">Contact information not available</p>
+                            )}
+                        </div>
                     </div>
                 ) : (
                     <div className="max-w-3xl mx-auto">
@@ -1053,6 +1208,28 @@ const CustomerView: React.FC = () => {
                                         
                                         <div className="flex justify-between items-center pt-2 border-t">
                                             <p className="font-semibold text-xl">{formatCurrency(order.total_price)}</p>
+                                            
+                                            {/* Rating Section */}
+                                            {order.status === OrderStatus.Delivered && (
+                                                <div className="flex items-center gap-2">
+                                                    {order.rating && order.rating.length > 0 ? (
+                                                        <button
+                                                            onClick={() => openRatingModal(order)}
+                                                            className="flex items-center gap-1 text-sm bg-yellow-50 text-yellow-700 px-3 py-1 rounded-full border border-yellow-200 hover:bg-yellow-100"
+                                                        >
+                                                            <span>{'⭐'.repeat(order.rating[0].rating)}</span>
+                                                            <span>Edit</span>
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            onClick={() => openRatingModal(order)}
+                                                            className="text-sm bg-orange-500 text-white px-3 py-1 rounded-full hover:bg-orange-600"
+                                                        >
+                                                            Rate Order
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -1071,6 +1248,19 @@ const CustomerView: React.FC = () => {
                     <NavButton label="Settings" active={view === 'settings'} onClick={() => setView('settings')} />
                 </div>
             </nav>
+
+            {/* Rating Modal */}
+            {showRatingModal && selectedOrderForRating && (
+                <RatingModal
+                    orderId={selectedOrderForRating.id}
+                    existingRating={selectedOrderForRating.rating?.[0]}
+                    onClose={() => {
+                        setShowRatingModal(false);
+                        setSelectedOrderForRating(null);
+                    }}
+                    onRatingSubmitted={handleRatingSubmitted}
+                />
+            )}
         </div>
     );
 };

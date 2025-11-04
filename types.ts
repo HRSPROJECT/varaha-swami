@@ -84,6 +84,7 @@ export interface Order {
   order_items: OrderItem[];
   profiles: Profile; // For customer name
   delivery_boy_profile?: Profile; // For delivery boy info
+  rating?: OrderRating; // Rating if exists
 }
 
 export interface OrderItem {
@@ -113,4 +114,45 @@ export interface PromotionalBanner {
   display_order: number;
   offer_text: string | null;
   valid_until: string | null;
+}
+
+export interface OrderRating {
+  id: number;
+  created_at: string;
+  order_id: number;
+  customer_id: string;
+  rating: number; // 1-5 stars
+  review_message: string | null;
+  improvement_suggestion: string | null;
+}
+
+export interface CustomerSuggestion {
+  id: number;
+  created_at: string;
+  customer_id: string;
+  suggestion_text: string;
+  customer_name: string | null;
+  is_read: boolean;
+}
+
+export interface RatingStats {
+  total_ratings: number;
+  average_rating: number;
+  five_star: number;
+  four_star: number;
+  three_star: number;
+  two_star: number;
+  one_star: number;
+}
+
+export interface RestaurantContact {
+  id: number;
+  created_at: string;
+  updated_at: string;
+  phone_number: string | null;
+  whatsapp_number: string | null;
+  email: string | null;
+  address: string | null;
+  working_hours: string | null;
+  is_active: boolean;
 }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
-import { Order, OrderStatus, MenuItem, PromotionalBanner } from '../../types';
+import { Order, OrderStatus, MenuItem, PromotionalBanner, OrderRating, CustomerSuggestion, RestaurantContact } from '../../types';
 import { formatCurrency } from '../../lib/utils';
 import Loading from '../shared/Loading';
 import toast from 'react-hot-toast';
@@ -12,8 +12,11 @@ const OwnerView: React.FC = () => {
     const [orders, setOrders] = useState<Order[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
     const [banners, setBanners] = useState<PromotionalBanner[]>([]);
+    const [reviews, setReviews] = useState<any[]>([]);
+    const [suggestions, setSuggestions] = useState<CustomerSuggestion[]>([]);
+    const [contactInfo, setContactInfo] = useState<RestaurantContact | null>(null);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'banners'>('orders');
+    const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'banners' | 'reviews' | 'contact'>('orders');
     const [showMenuForm, setShowMenuForm] = useState(false);
     const [showBannerForm, setShowBannerForm] = useState(false);
     const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
@@ -39,6 +42,15 @@ const OwnerView: React.FC = () => {
         offer_text: '',
         display_order: '0',
         valid_until: ''
+    });
+
+    // Contact form state
+    const [contactForm, setContactForm] = useState({
+        phone_number: '',
+        whatsapp_number: '',
+        email: '',
+        address: '',
+        working_hours: '9:00 AM - 10:00 PM'
     });
 
     const fetchOrders = useCallback(async () => {
@@ -82,6 +94,51 @@ const OwnerView: React.FC = () => {
         }
     }, []);
 
+    const fetchReviews = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('ratings_with_details')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error("Could not fetch reviews:", error);
+        } else {
+            setReviews(data || []);
+        }
+    }, []);
+
+    const fetchSuggestions = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('suggestions_with_details')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            console.error("Could not fetch suggestions:", error);
+        } else {
+            setSuggestions(data || []);
+        }
+    }, []);
+
+    const fetchContactInfo = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('restaurant_contact')
+            .select('*')
+            .eq('is_active', true)
+            .single();
+
+        if (!error && data) {
+            setContactInfo(data);
+            setContactForm({
+                phone_number: data.phone_number || '',
+                whatsapp_number: data.whatsapp_number || '',
+                email: data.email || '',
+                address: data.address || '',
+                working_hours: data.working_hours || '9:00 AM - 10:00 PM'
+            });
+        }
+    }, []);
+
     const updateRestaurantStatus = async (status: boolean) => {
         if (!profile?.id) return;
         const { error } = await supabase
@@ -106,7 +163,7 @@ const OwnerView: React.FC = () => {
 
         const fetchData = async () => {
             setLoading(true);
-            await Promise.all([fetchOrders(), fetchMenuItems(), fetchBanners()]);
+            await Promise.all([fetchOrders(), fetchMenuItems(), fetchBanners(), fetchReviews(), fetchSuggestions(), fetchContactInfo()]);
             setLoading(false);
         };
         
@@ -146,7 +203,7 @@ const OwnerView: React.FC = () => {
             supabase.removeChannel(menuSubscription);
             clearInterval(polling);
         };
-    }, [fetchOrders, fetchMenuItems, fetchBanners, profile]);
+    }, [fetchOrders, fetchMenuItems, fetchBanners, fetchReviews, fetchSuggestions, fetchContactInfo, profile]);
 
     const updateOrderStatus = async (orderId: number, newStatus: OrderStatus) => {
         const toastId = toast.loading('Updating order status...');
@@ -452,6 +509,39 @@ const OwnerView: React.FC = () => {
         setShowBannerForm(true);
     };
 
+    // Update contact info
+    const updateContactInfo = async () => {
+        try {
+            const contactData = {
+                phone_number: contactForm.phone_number || null,
+                whatsapp_number: contactForm.whatsapp_number || null,
+                email: contactForm.email || null,
+                address: contactForm.address || null,
+                working_hours: contactForm.working_hours || '9:00 AM - 10:00 PM'
+            };
+
+            let result;
+            if (contactInfo) {
+                result = await supabase
+                    .from('restaurant_contact')
+                    .update(contactData)
+                    .eq('id', contactInfo.id);
+            } else {
+                result = await supabase
+                    .from('restaurant_contact')
+                    .insert([{ ...contactData, is_active: true }]);
+            }
+
+            if (result.error) throw result.error;
+
+            toast.success('Contact information updated successfully!');
+            fetchContactInfo();
+        } catch (error) {
+            console.error('Error updating contact info:', error);
+            toast.error('Failed to update contact information');
+        }
+    };
+
     const handleCancelForm = () => {
         setShowMenuForm(false);
         setEditingItem(null);
@@ -577,6 +667,22 @@ const OwnerView: React.FC = () => {
                             }`}
                         >
                             🎯 Banners
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('reviews')}
+                            className={`px-4 py-2 rounded-lg font-semibold transition ${
+                                activeTab === 'reviews' ? 'bg-orange-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                        >
+                            ⭐ Reviews
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('contact')}
+                            className={`px-4 py-2 rounded-lg font-semibold transition ${
+                                activeTab === 'contact' ? 'bg-orange-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                        >
+                            📞 Contact
                         </button>
                         <button onClick={signOut} className="text-gray-500 hover:text-orange-600 font-semibold">Logout</button>
                     </div>
@@ -820,6 +926,157 @@ const OwnerView: React.FC = () => {
                                         </div>
                                     ))
                                 )}
+                            </div>
+                        </motion.div>
+                    ) : activeTab === 'reviews' ? (
+                        <motion.div
+                            key="reviews"
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
+                        >
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                {/* Reviews Section */}
+                                <div>
+                                    <h2 className="text-2xl font-bold text-gray-800 mb-6">⭐ Customer Reviews</h2>
+                                    <div className="space-y-4">
+                                        {reviews.length === 0 ? (
+                                            <div className="text-center py-8 bg-white rounded-lg shadow">
+                                                <p className="text-gray-500">No reviews yet</p>
+                                            </div>
+                                        ) : (
+                                            reviews.map((review) => (
+                                                <div key={review.id} className="bg-white rounded-lg shadow p-4">
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <div>
+                                                            <h4 className="font-semibold">{review.customer_name || 'Anonymous'}</h4>
+                                                            <div className="flex items-center gap-1">
+                                                                {Array.from({ length: 5 }, (_, i) => (
+                                                                    <span key={i} className={i < review.rating ? 'text-yellow-400' : 'text-gray-300'}>
+                                                                        ⭐
+                                                                    </span>
+                                                                ))}
+                                                                <span className="ml-2 text-sm text-gray-500">
+                                                                    Order #{review.order_id}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <span className="text-xs text-gray-400">
+                                                            {new Date(review.created_at).toLocaleDateString()}
+                                                        </span>
+                                                    </div>
+                                                    {review.review_message && (
+                                                        <p className="text-gray-700 mb-2">{review.review_message}</p>
+                                                    )}
+                                                    {review.improvement_suggestion && (
+                                                        <div className="bg-blue-50 p-3 rounded border-l-4 border-blue-400">
+                                                            <p className="text-sm text-blue-800">
+                                                                <strong>Suggestion:</strong> {review.improvement_suggestion}
+                                                            </p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Suggestions Section */}
+                                <div>
+                                    <h2 className="text-2xl font-bold text-gray-800 mb-6">💡 Customer Suggestions</h2>
+                                    <div className="space-y-4">
+                                        {suggestions.length === 0 ? (
+                                            <div className="text-center py-8 bg-white rounded-lg shadow">
+                                                <p className="text-gray-500">No suggestions yet</p>
+                                            </div>
+                                        ) : (
+                                            suggestions.map((suggestion) => (
+                                                <div key={suggestion.id} className="bg-white rounded-lg shadow p-4">
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <h4 className="font-semibold">{suggestion.customer_name || 'Anonymous'}</h4>
+                                                        <span className="text-xs text-gray-400">
+                                                            {new Date(suggestion.created_at).toLocaleDateString()}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-gray-700">{suggestion.suggestion_text}</p>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </motion.div>
+                    ) : activeTab === 'contact' ? (
+                        <motion.div
+                            key="contact"
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
+                        >
+                            <div className="max-w-2xl mx-auto">
+                                <h2 className="text-2xl font-bold text-gray-800 mb-6">📞 Contact Information</h2>
+                                <div className="bg-white rounded-lg shadow p-6">
+                                    <div className="space-y-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                                                <input
+                                                    type="tel"
+                                                    value={contactForm.phone_number}
+                                                    onChange={(e) => setContactForm(prev => ({...prev, phone_number: e.target.value}))}
+                                                    placeholder="+91 9876543210"
+                                                    className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">WhatsApp Number</label>
+                                                <input
+                                                    type="tel"
+                                                    value={contactForm.whatsapp_number}
+                                                    onChange={(e) => setContactForm(prev => ({...prev, whatsapp_number: e.target.value}))}
+                                                    placeholder="+91 9876543210"
+                                                    className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                                            <input
+                                                type="email"
+                                                value={contactForm.email}
+                                                onChange={(e) => setContactForm(prev => ({...prev, email: e.target.value}))}
+                                                placeholder="contact@restaurant.com"
+                                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
+                                            <textarea
+                                                value={contactForm.address}
+                                                onChange={(e) => setContactForm(prev => ({...prev, address: e.target.value}))}
+                                                placeholder="Restaurant address..."
+                                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 resize-none"
+                                                rows={3}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Working Hours</label>
+                                            <input
+                                                type="text"
+                                                value={contactForm.working_hours}
+                                                onChange={(e) => setContactForm(prev => ({...prev, working_hours: e.target.value}))}
+                                                placeholder="9:00 AM - 10:00 PM"
+                                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                            />
+                                        </div>
+                                        <button
+                                            onClick={updateContactInfo}
+                                            className="w-full bg-orange-600 text-white py-2 rounded-lg font-semibold hover:bg-orange-700 transition"
+                                        >
+                                            Update Contact Information
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </motion.div>
                     ) : (
