@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
-import { MenuItem, Order, CartItem, OrderType, OrderStatus, Profile } from '../../types';
+import { MenuItem, Order, CartItem, OrderType, OrderStatus, Profile, PromotionalBanner } from '../../types';
 import { haversineDistance, formatCurrency, getRoute } from '../../lib/utils';
 import Map from '../shared/Map';
+import BannerSlider from '../shared/BannerSlider';
 import toast from 'react-hot-toast';
 import { AnimatePresence, motion } from 'framer-motion';
 
@@ -29,13 +30,39 @@ const CustomerView: React.FC = () => {
     const [locationError, setLocationError] = useState<string | null>(null);
     const [showRouteMap, setShowRouteMap] = useState(false);
     
-    const [view, setView] = useState<'menu' | 'cart' | 'orders'>('menu');
+    // Search and category functionality
+    const [searchQuery, setSearchQuery] = useState('');
+    const [filteredMenu, setFilteredMenu] = useState<MenuItem[]>([]);
+    const [categories, setCategories] = useState<string[]>([]);
+    const [selectedCategory, setSelectedCategory] = useState<string>('All');
+    
+    // Banner and frequent items
+    const [banners, setBanners] = useState<PromotionalBanner[]>([]);
+    const [frequentItems, setFrequentItems] = useState<MenuItem[]>([]);
+    const [isRestaurantOnline, setIsRestaurantOnline] = useState(true);
+    
+    const [view, setView] = useState<'menu' | 'cart' | 'orders' | 'settings'>('menu');
     const [addressForm, setAddressForm] = useState({
         houseNo: '',
         buildingNo: '',
         landmark: '',
         phone: ''
     });
+
+    // Load saved address details on mount
+    useEffect(() => {
+        if (profile) {
+            const savedAddress = localStorage.getItem(`address_${profile.id}`);
+            if (savedAddress) {
+                try {
+                    const parsed = JSON.parse(savedAddress);
+                    setAddressForm(parsed);
+                } catch (e) {
+                    console.error('Failed to parse saved address:', e);
+                }
+            }
+        }
+    }, [profile]);
 
     // Get location every time component mounts and periodically update
     useEffect(() => {
@@ -188,19 +215,72 @@ const CustomerView: React.FC = () => {
     // Fetch menu immediately (priority)
     const fetchMenu = useCallback(async () => {
         setLoadingMenu(true);
-        const { data, error } = await supabase
-            .from('menu_items')
-            .select('*')
-            .eq('is_available', true)
-            .eq('is_deleted', false); // Exclude soft-deleted items
         
-        if (error) {
-            console.error('Menu fetch error:', error);
+        // Get menu items and restaurant status in parallel
+        const [menuResult, ownerResult] = await Promise.all([
+            supabase
+                .from('menu_items')
+                .select('*')
+                .eq('is_available', true)
+                .eq('is_deleted', false)
+                .order('category')
+                .order('name'),
+            supabase
+                .from('profiles')
+                .select('is_online')
+                .eq('user_type', 'owner')
+                .single()
+        ]);
+        
+        if (menuResult.error) {
+            console.error('Menu fetch error:', menuResult.error);
         } else {
-            setMenu(data || []);
+            setMenu(menuResult.data || []);
+            // Extract unique categories
+            const uniqueCategories = [...new Set(menuResult.data.map(item => item.category).filter(Boolean))];
+            setCategories(['All', ...uniqueCategories]);
         }
+        
+        setIsRestaurantOnline(ownerResult.data?.is_online ?? true);
         setLoadingMenu(false);
     }, []);
+
+    // Fetch banners
+    const fetchBanners = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('promotional_banners')
+            .select('*')
+            .eq('is_active', true)
+            .order('display_order');
+
+        if (!error && data) {
+            setBanners(data as PromotionalBanner[]);
+        }
+    }, []);
+
+    // Fetch frequent items
+    const fetchFrequentItems = useCallback(async () => {
+        if (!user) return;
+        
+        const { data, error } = await supabase
+            .from('order_items')
+            .select(`
+                menu_item_id,
+                quantity,
+                menu_items(*)
+            `)
+            .eq('orders.customer_id', user.id)
+            .order('quantity', { ascending: false })
+            .limit(6);
+
+        if (!error && data) {
+            const items = data
+                .map(item => item.menu_items)
+                .filter(Boolean)
+                .flat() as MenuItem[];
+            setFrequentItems(items);
+        }
+    }, [user]);
 
     // Fetch orders only when needed (lazy loading)
     const fetchOrders = useCallback(async () => {
@@ -221,10 +301,31 @@ const CustomerView: React.FC = () => {
         setLoadingOrders(false);
     }, [user]);
 
+    // Filter menu based on search and category
+    useEffect(() => {
+        let filtered = menu;
+        
+        if (selectedCategory !== 'All') {
+            filtered = filtered.filter(item => item.category === selectedCategory);
+        }
+        
+        if (searchQuery.trim()) {
+            filtered = filtered.filter(item =>
+                item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                item.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                item.category?.toLowerCase().includes(searchQuery.toLowerCase())
+            );
+        }
+        
+        setFilteredMenu(filtered);
+    }, [menu, searchQuery, selectedCategory]);
+
     // Fetch menu immediately on mount
     useEffect(() => {
         fetchMenu();
-    }, [fetchMenu]);
+        fetchBanners();
+        fetchFrequentItems();
+    }, [fetchMenu, fetchBanners, fetchFrequentItems]);
 
     // Only fetch orders when switching to orders tab
     useEffect(() => {
@@ -300,7 +401,20 @@ const CustomerView: React.FC = () => {
     const total = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
+    // Save delivery details
+    const saveDeliveryDetails = () => {
+        if (profile && addressForm.houseNo && addressForm.phone) {
+            localStorage.setItem(`address_${profile.id}`, JSON.stringify(addressForm));
+            toast.success('Delivery details saved!');
+        }
+    };
+
     const placeOrder = async (orderType: OrderType) => {
+        if (!isRestaurantOnline) {
+            toast.error("Restaurant is currently offline. Orders are not being accepted.");
+            return;
+        }
+        
         if (!user || cart.length === 0 || !customerLocation) {
             toast.error("Cart is empty or location is unavailable.");
             return;
@@ -356,6 +470,10 @@ const CustomerView: React.FC = () => {
             await supabase.from('orders').delete().eq('id', orderData.id);
         } else {
             toast.success('Order placed successfully!', {id: toastId});
+            // Save delivery details for future use
+            if (orderType === OrderType.Delivery && profile) {
+                localStorage.setItem(`address_${profile.id}`, JSON.stringify(addressForm));
+            }
             setCart([]);
             setAddressForm({ houseNo: '', buildingNo: '', landmark: '', phone: '' });
             setView('orders');
@@ -473,27 +591,62 @@ const CustomerView: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-gray-50">
-            <header className="bg-white shadow-md p-4 sticky top-0 z-10">
-                <div className="container mx-auto flex justify-between items-center">
-                    <div>
-                        <h1 className="text-3xl font-bold text-orange-600">Varaha Swami</h1>
-                        <p className="text-sm text-gray-500">Welcome, {profile?.full_name || user?.email}</p>
+            <header className="bg-white shadow-md sticky top-0 z-10">
+                <div className="container mx-auto p-4">
+                    <div className="flex justify-between items-center mb-3">
+                        <div>
+                            <div className="flex items-center gap-3">
+                                <h1 className="text-3xl font-bold text-orange-600">Varaha Swami</h1>
+                                <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                                    isRestaurantOnline 
+                                        ? 'bg-green-100 text-green-800' 
+                                        : 'bg-red-100 text-red-800'
+                                }`}>
+                                    {isRestaurantOnline ? '🟢 ONLINE' : '🔴 OFFLINE'}
+                                </span>
+                            </div>
+                            <p className="text-sm text-gray-500">Welcome, {profile?.full_name || user?.email}</p>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          {distance !== null && (
+                            <button 
+                                onClick={() => setShowRouteMap(true)}
+                                className={`text-sm px-3 py-1.5 rounded-full font-semibold cursor-pointer hover:shadow-lg transition ${isDeliveryAvailable ? 'bg-green-100 text-green-800 hover:bg-green-200' : 'bg-red-100 text-red-800 hover:bg-red-200'}`}
+                            >
+                              {isDeliveryAvailable ? `✓ Delivery` : `📦 Pickup Only`}
+                              <span className="text-xs ml-1 font-normal">
+                                ({distance < 1 ? `${(distance * 1000).toFixed(0)}m` : `${distance.toFixed(1)}km`}
+                                {duration ? ` • ${duration}min` : ''})
+                              </span>
+                            </button>
+                          )}
+                          <button onClick={signOut} className="text-gray-500 hover:text-orange-600 font-semibold">Logout</button>
+                        </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      {distance !== null && (
-                        <button 
-                            onClick={() => setShowRouteMap(true)}
-                            className={`text-sm px-3 py-1.5 rounded-full font-semibold cursor-pointer hover:shadow-lg transition ${isDeliveryAvailable ? 'bg-green-100 text-green-800 hover:bg-green-200' : 'bg-red-100 text-red-800 hover:bg-red-200'}`}
-                        >
-                          {isDeliveryAvailable ? `✓ Delivery` : `📦 Pickup Only`}
-                          <span className="text-xs ml-1 font-normal">
-                            ({distance < 1 ? `${(distance * 1000).toFixed(0)}m` : `${distance.toFixed(1)}km`}
-                            {duration ? ` • ${duration}min` : ''})
-                          </span>
-                        </button>
-                      )}
-                      <button onClick={signOut} className="text-gray-500 hover:text-orange-600 font-semibold">Logout</button>
-                    </div>
+                    
+                    {/* Search Bar - only show on menu view */}
+                    {view === 'menu' && (
+                        <div className="relative">
+                            <input
+                                type="text"
+                                placeholder="Search food items..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full px-4 py-2 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                            />
+                            <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400">
+                                🔍
+                            </div>
+                            {searchQuery && (
+                                <button
+                                    onClick={() => setSearchQuery('')}
+                                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                                >
+                                    ✕
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
             </header>
             <main className="container mx-auto p-4 pb-24">
@@ -513,41 +666,122 @@ const CustomerView: React.FC = () => {
                                 <p className="mt-4 text-gray-600">Loading menu...</p>
                             </div>
                         </div>
-                    ) : menu.length === 0 ? (
-                        <div className="text-center py-20">
-                            <p className="text-gray-500">No menu items available at the moment.</p>
-                        </div>
                     ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {menu.map(item => (
-                                <motion.div 
-                                    key={item.id} 
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col hover:shadow-xl transition-shadow"
-                                >
-                                    <img 
-                                        src={item.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400'} 
-                                        alt={item.name} 
-                                        className="w-full h-48 object-cover"
-                                        loading="lazy"
-                                    />
-                                    <div className="p-4 flex flex-col flex-grow">
-                                        <h3 className="text-xl font-bold">{item.name}</h3>
-                                        <p className="text-gray-600 my-2 flex-grow text-sm">{item.description}</p>
-                                        <div className="flex justify-between items-center mt-4">
-                                            <p className="text-lg font-bold text-orange-600">{formatCurrency(item.price)}</p>
-                                            <button 
-                                                onClick={() => addToCart(item)} 
-                                                className="bg-orange-500 text-white px-5 py-2 rounded-full font-semibold hover:bg-orange-600 transition-colors"
+                        <div>
+                            {/* Promotional Banners */}
+                            <BannerSlider banners={banners} />
+                            
+                            {/* Frequent Items */}
+                            {frequentItems.length > 0 && (
+                                <div className="mb-6">
+                                    <h2 className="text-xl font-bold mb-3">Reorder Favorites</h2>
+                                    <div className="flex gap-3 overflow-x-auto pb-2">
+                                        {frequentItems.map(item => (
+                                            <div key={item.id} className="flex-shrink-0 w-32">
+                                                <img 
+                                                    src={item.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=200'} 
+                                                    alt={item.name}
+                                                    className="w-full h-20 object-cover rounded-lg mb-2"
+                                                />
+                                                <p className="text-sm font-medium truncate">{item.name}</p>
+                                                <p className="text-xs text-orange-600">{formatCurrency(item.price)}</p>
+                                                <button 
+                                                    onClick={() => addToCart(item)}
+                                                    className="w-full mt-1 bg-orange-500 text-white text-xs py-1 rounded hover:bg-orange-600"
+                                                >
+                                                    Add
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* Category Filter */}
+                            {categories.length > 1 && (
+                                <div className="mb-4">
+                                    <div className="flex gap-2 overflow-x-auto pb-2">
+                                        {categories.map(category => (
+                                            <button
+                                                key={category}
+                                                onClick={() => setSelectedCategory(category)}
+                                                className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition ${
+                                                    selectedCategory === category
+                                                        ? 'bg-orange-500 text-white'
+                                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                                }`}
                                             >
-                                                Add
+                                                {category}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {filteredMenu.length === 0 ? (
+                                <div className="text-center py-20">
+                                    {searchQuery || selectedCategory !== 'All' ? (
+                                        <div>
+                                            <p className="text-gray-500 mb-2">
+                                                No items found {searchQuery && `for "${searchQuery}"`}
+                                                {selectedCategory !== 'All' && ` in ${selectedCategory}`}
+                                            </p>
+                                            <button 
+                                                onClick={() => {
+                                                    setSearchQuery('');
+                                                    setSelectedCategory('All');
+                                                }}
+                                                className="text-orange-600 hover:text-orange-700 font-semibold"
+                                            >
+                                                Clear filters
                                             </button>
                                         </div>
+                                    ) : (
+                                        <p className="text-gray-500">No menu items available at the moment.</p>
+                                    )}
+                                </div>
+                            ) : (
+                                <div>
+                                    {(searchQuery || selectedCategory !== 'All') && (
+                                        <div className="mb-4 text-sm text-gray-600">
+                                            Found {filteredMenu.length} item{filteredMenu.length !== 1 ? 's' : ''}
+                                            {searchQuery && ` for "${searchQuery}"`}
+                                            {selectedCategory !== 'All' && ` in ${selectedCategory}`}
+                                        </div>
+                                    )}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                                        {filteredMenu.map(item => (
+                                            <motion.div 
+                                                key={item.id} 
+                                                initial={{ opacity: 0, y: 20 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                transition={{ duration: 0.2 }}
+                                                className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col hover:shadow-xl transition-shadow"
+                                            >
+                                                <img 
+                                                    src={item.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400'} 
+                                                    alt={item.name} 
+                                                    className="w-full h-48 object-cover"
+                                                    loading="lazy"
+                                                />
+                                                <div className="p-4 flex flex-col flex-grow">
+                                                    <h3 className="text-xl font-bold">{item.name}</h3>
+                                                    <p className="text-gray-600 my-2 flex-grow text-sm">{item.description}</p>
+                                                    <div className="flex justify-between items-center mt-4">
+                                                        <p className="text-lg font-bold text-orange-600">{formatCurrency(item.price)}</p>
+                                                        <button 
+                                                            onClick={() => addToCart(item)} 
+                                                            className="bg-orange-500 text-white px-5 py-2 rounded-full font-semibold hover:bg-orange-600 transition-colors"
+                                                        >
+                                                            Add
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </motion.div>
+                                        ))}
                                     </div>
-                                </motion.div>
-                            ))}
+                                </div>
+                            )}
                         </div>
                     )
                 ) : view === 'cart' ? (
@@ -639,17 +873,125 @@ const CustomerView: React.FC = () => {
                                             required
                                         />
                                     </div>
+                                    
+                                    {/* Save Details Button */}
+                                    <button
+                                        type="button"
+                                        onClick={saveDeliveryDetails}
+                                        className="w-full bg-gray-600 text-white py-2 rounded-lg font-semibold hover:bg-gray-700 transition text-sm"
+                                    >
+                                        💾 Save Details for Future Orders
+                                    </button>
                                 </div>
                                 
                                 <div className="mt-6 flex flex-col sm:flex-row gap-4">
-                                    {isDeliveryAvailable ? 
-                                      <button onClick={() => placeOrder(OrderType.Delivery)} className="flex-1 bg-green-600 text-white p-3 rounded-lg font-bold text-lg hover:bg-green-700 transition">Place Delivery Order</button>
-                                      : <div className="flex-1 text-center p-3 rounded-lg bg-gray-200 text-gray-600">Delivery not available</div>
-                                    }
-                                    <button onClick={() => placeOrder(OrderType.Pickup)} className="flex-1 bg-blue-600 text-white p-3 rounded-lg font-bold text-lg hover:bg-blue-700 transition">Place Pickup Order</button>
+                                    {!isRestaurantOnline ? (
+                                        <div className="col-span-2 text-center p-3 rounded-lg bg-red-100 text-red-800 font-semibold">
+                                            🔴 Restaurant is currently offline. Orders are not being accepted.
+                                        </div>
+                                    ) : (
+                                        <>
+                                            {isDeliveryAvailable ? 
+                                              <button onClick={() => placeOrder(OrderType.Delivery)} className="flex-1 bg-green-600 text-white p-3 rounded-lg font-bold text-lg hover:bg-green-700 transition">Place Delivery Order</button>
+                                              : <div className="flex-1 text-center p-3 rounded-lg bg-gray-200 text-gray-600">Delivery not available</div>
+                                            }
+                                            <button onClick={() => placeOrder(OrderType.Pickup)} className="flex-1 bg-blue-600 text-white p-3 rounded-lg font-bold text-lg hover:bg-blue-700 transition">Place Pickup Order</button>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         )}
+                    </div>
+                ) : view === 'settings' ? (
+                    <div className="max-w-2xl mx-auto">
+                        <h2 className="text-3xl font-bold mb-6">Settings</h2>
+                        
+                        {/* Profile Settings */}
+                        <div className="bg-white rounded-lg shadow p-6 mb-6">
+                            <h3 className="text-xl font-semibold mb-4">Profile Information</h3>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                                    <input
+                                        type="text"
+                                        value={profile?.full_name || ''}
+                                        onChange={(e) => {
+                                            // Update profile name
+                                            if (profile) {
+                                                supabase.from('profiles').update({ full_name: e.target.value }).eq('id', profile.id);
+                                            }
+                                        }}
+                                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                        placeholder="Enter your full name"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                                    <input
+                                        type="email"
+                                        value={user?.email || ''}
+                                        disabled
+                                        className="w-full p-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-500"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">Email cannot be changed</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Saved Delivery Details */}
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <h3 className="text-xl font-semibold mb-4">Saved Delivery Details</h3>
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">House No.</label>
+                                        <input
+                                            type="text"
+                                            value={addressForm.houseNo}
+                                            onChange={(e) => setAddressForm(prev => ({...prev, houseNo: e.target.value}))}
+                                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                            placeholder="123, A-Block"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">Building No.</label>
+                                        <input
+                                            type="text"
+                                            value={addressForm.buildingNo}
+                                            onChange={(e) => setAddressForm(prev => ({...prev, buildingNo: e.target.value}))}
+                                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                            placeholder="Tower B"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Landmark</label>
+                                    <input
+                                        type="text"
+                                        value={addressForm.landmark}
+                                        onChange={(e) => setAddressForm(prev => ({...prev, landmark: e.target.value}))}
+                                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                        placeholder="Near Metro Station"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                                    <input
+                                        type="tel"
+                                        value={addressForm.phone}
+                                        onChange={(e) => setAddressForm(prev => ({...prev, phone: e.target.value}))}
+                                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                        placeholder="+91 9876543210"
+                                    />
+                                </div>
+                                <button
+                                    onClick={saveDeliveryDetails}
+                                    className="w-full bg-orange-600 text-white py-2 rounded-lg font-semibold hover:bg-orange-700 transition"
+                                >
+                                    Save Delivery Details
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 ) : (
                     <div className="max-w-3xl mx-auto">
@@ -725,6 +1067,7 @@ const CustomerView: React.FC = () => {
                     <NavButton label="Menu" active={view === 'menu'} onClick={() => setView('menu')} />
                     <NavButton label="Cart" active={view === 'cart'} onClick={() => setView('cart')} badge={cartItemCount} />
                     <NavButton label="Orders" active={view === 'orders'} onClick={() => setView('orders')} />
+                    <NavButton label="Settings" active={view === 'settings'} onClick={() => setView('settings')} />
                 </div>
             </nav>
         </div>

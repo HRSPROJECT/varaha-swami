@@ -191,3 +191,143 @@ export async function getRoadDistance(
 export function formatCurrency(amount: number) {
     return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(amount);
 }
+
+/**
+ * Reverse geocoding - Convert coordinates to address with high accuracy
+ */
+export async function getAddressFromCoordinates(lat: number, lon: number): Promise<{
+  address: string;
+  houseNo?: string;
+  area?: string;
+  landmark?: string;
+  success: boolean;
+}> {
+  try {
+    // Try multiple services for better accuracy
+    const results = await Promise.allSettled([
+      // Primary: Nominatim with detailed zoom
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=19&addressdetails=1&extratags=1`, {
+        headers: { 'User-Agent': 'VarahaSwami-FoodDelivery/1.0' }
+      }).then(r => r.json()),
+      
+      // Secondary: MapBox (if available)
+      fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${lon},${lat}.json?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycXBndHRqcmZ3N3gifQ.rJcFIG214AriISLbB6B5aw&types=address,poi&limit=1`)
+        .then(r => r.json()).catch(() => null)
+    ]);
+
+    let bestResult = null;
+    let bestScore = 0;
+
+    // Process Nominatim result
+    if (results[0].status === 'fulfilled' && results[0].value?.display_name) {
+      const data = results[0].value;
+      const addr = data.address || {};
+      
+      // Calculate accuracy score
+      let score = 0;
+      if (addr.house_number) score += 30;
+      if (addr.road || addr.street) score += 25;
+      if (addr.suburb || addr.neighbourhood) score += 20;
+      if (addr.postcode) score += 15;
+      if (addr.city || addr.town) score += 10;
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestResult = {
+          houseNo: addr.house_number || addr.building || '',
+          road: addr.road || addr.street || '',
+          area: addr.suburb || addr.neighbourhood || addr.quarter || addr.residential || '',
+          landmark: addr.amenity || addr.shop || addr.building || addr.office || '',
+          city: addr.city || addr.town || addr.village || '',
+          postcode: addr.postcode || '',
+          state: addr.state || ''
+        };
+      }
+    }
+
+    // Process MapBox result (if available)
+    if (results[1].status === 'fulfilled' && results[1].value?.features?.length > 0) {
+      const feature = results[1].value.features[0];
+      const props = feature.properties || {};
+      const context = feature.context || [];
+      
+      let score = 0;
+      if (props.address) score += 35;
+      if (context.find(c => c.id.includes('address'))) score += 25;
+      if (context.find(c => c.id.includes('neighborhood'))) score += 20;
+      
+      if (score > bestScore) {
+        bestScore = score;
+        const neighborhood = context.find(c => c.id.includes('neighborhood'))?.text || '';
+        const place = context.find(c => c.id.includes('place'))?.text || '';
+        
+        bestResult = {
+          houseNo: props.address || '',
+          road: feature.place_name?.split(',')[0] || '',
+          area: neighborhood || place || '',
+          landmark: props.category || '',
+          city: place || '',
+          postcode: context.find(c => c.id.includes('postcode'))?.text || '',
+          state: context.find(c => c.id.includes('region'))?.text || ''
+        };
+      }
+    }
+
+    if (!bestResult) {
+      throw new Error('No geocoding results');
+    }
+
+    // Build accurate address string
+    let address = '';
+    const parts = [];
+    
+    if (bestResult.houseNo) parts.push(bestResult.houseNo);
+    if (bestResult.road) parts.push(bestResult.road);
+    if (bestResult.area && bestResult.area !== bestResult.road) parts.push(bestResult.area);
+    if (bestResult.city && bestResult.city !== bestResult.area) parts.push(bestResult.city);
+    if (bestResult.postcode) parts.push(bestResult.postcode);
+    
+    address = parts.join(', ');
+
+    console.log('🎯 Address accuracy score:', bestScore, '/ 100');
+    console.log('📍 Parsed address:', {
+      full: address,
+      house: bestResult.houseNo,
+      area: bestResult.area,
+      landmark: bestResult.landmark
+    });
+
+    return {
+      address: address || `${lat.toFixed(6)}, ${lon.toFixed(6)}`,
+      houseNo: bestResult.houseNo,
+      area: bestResult.area,
+      landmark: bestResult.landmark && bestResult.landmark !== bestResult.houseNo ? bestResult.landmark : undefined,
+      success: bestScore > 30 // Consider successful if we have good data
+    };
+
+  } catch (error) {
+    console.error('Geocoding error:', error);
+    
+    // Fallback: Try to get at least basic location info
+    try {
+      const fallback = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+      const data = await fallback.json();
+      
+      if (data.locality || data.city) {
+        const address = [data.locality, data.city, data.principalSubdivision].filter(Boolean).join(', ');
+        return {
+          address,
+          area: data.locality || data.city,
+          success: false
+        };
+      }
+    } catch (fallbackError) {
+      console.error('Fallback geocoding failed:', fallbackError);
+    }
+    
+    return {
+      address: `${lat.toFixed(6)}, ${lon.toFixed(6)}`,
+      success: false
+    };
+  }
+}

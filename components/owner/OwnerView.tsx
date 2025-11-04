@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 import { useAuth } from '../../hooks/useAuth';
-import { Order, OrderStatus, MenuItem } from '../../types';
+import { Order, OrderStatus, MenuItem, PromotionalBanner } from '../../types';
 import { formatCurrency } from '../../lib/utils';
 import Loading from '../shared/Loading';
 import toast from 'react-hot-toast';
@@ -11,10 +11,13 @@ const OwnerView: React.FC = () => {
     const { profile, signOut } = useAuth();
     const [orders, setOrders] = useState<Order[]>([]);
     const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+    const [banners, setBanners] = useState<PromotionalBanner[]>([]);
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<'orders' | 'menu'>('orders');
+    const [activeTab, setActiveTab] = useState<'orders' | 'menu' | 'banners'>('orders');
     const [showMenuForm, setShowMenuForm] = useState(false);
+    const [showBannerForm, setShowBannerForm] = useState(false);
     const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
+    const [editingBanner, setEditingBanner] = useState<PromotionalBanner | null>(null);
     const [isRestaurantOnline, setIsRestaurantOnline] = useState(true);
 
     // Menu form state
@@ -26,6 +29,16 @@ const OwnerView: React.FC = () => {
         image_url: '',
         is_available: true,
         preparation_time_minutes: '15'
+    });
+
+    // Banner form state
+    const [bannerForm, setBannerForm] = useState({
+        title: '',
+        description: '',
+        image_url: '',
+        offer_text: '',
+        display_order: '0',
+        valid_until: ''
     });
 
     const fetchOrders = useCallback(async () => {
@@ -56,6 +69,19 @@ const OwnerView: React.FC = () => {
         }
     }, []);
 
+    const fetchBanners = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('promotional_banners')
+            .select('*')
+            .order('display_order');
+
+        if (error) {
+            toast.error("Could not fetch banners.");
+        } else {
+            setBanners(data as PromotionalBanner[]);
+        }
+    }, []);
+
     const updateRestaurantStatus = async (status: boolean) => {
         if (!profile?.id) return;
         const { error } = await supabase
@@ -80,7 +106,7 @@ const OwnerView: React.FC = () => {
 
         const fetchData = async () => {
             setLoading(true);
-            await Promise.all([fetchOrders(), fetchMenuItems()]);
+            await Promise.all([fetchOrders(), fetchMenuItems(), fetchBanners()]);
             setLoading(false);
         };
         
@@ -120,7 +146,7 @@ const OwnerView: React.FC = () => {
             supabase.removeChannel(menuSubscription);
             clearInterval(polling);
         };
-    }, [fetchOrders, fetchMenuItems, profile]);
+    }, [fetchOrders, fetchMenuItems, fetchBanners, profile]);
 
     const updateOrderStatus = async (orderId: number, newStatus: OrderStatus) => {
         const toastId = toast.loading('Updating order status...');
@@ -346,6 +372,86 @@ const OwnerView: React.FC = () => {
         });
     };
 
+    // Banner management functions
+    const handleBannerSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        
+        const bannerData = {
+            title: bannerForm.title,
+            description: bannerForm.description || null,
+            image_url: bannerForm.image_url,
+            offer_text: bannerForm.offer_text || null,
+            display_order: parseInt(bannerForm.display_order) || 0,
+            valid_until: bannerForm.valid_until ? new Date(bannerForm.valid_until).toISOString() : null,
+            is_active: true
+        };
+
+        let result;
+        if (editingBanner) {
+            result = await supabase
+                .from('promotional_banners')
+                .update(bannerData)
+                .eq('id', editingBanner.id);
+        } else {
+            result = await supabase
+                .from('promotional_banners')
+                .insert([bannerData]);
+        }
+
+        if (result.error) {
+            toast.error(`Failed to ${editingBanner ? 'update' : 'create'} banner.`);
+        } else {
+            toast.success(`Banner ${editingBanner ? 'updated' : 'created'} successfully!`);
+            setShowBannerForm(false);
+            setEditingBanner(null);
+            setBannerForm({ title: '', description: '', image_url: '', offer_text: '', display_order: '0', valid_until: '' });
+            fetchBanners();
+        }
+    };
+
+    const deleteBanner = async (id: number) => {
+        if (!confirm('Are you sure you want to delete this banner?')) return;
+        
+        const { error } = await supabase
+            .from('promotional_banners')
+            .delete()
+            .eq('id', id);
+
+        if (error) {
+            toast.error('Failed to delete banner.');
+        } else {
+            toast.success('Banner deleted successfully!');
+            fetchBanners();
+        }
+    };
+
+    const toggleBannerStatus = async (id: number, currentStatus: boolean) => {
+        const { error } = await supabase
+            .from('promotional_banners')
+            .update({ is_active: !currentStatus })
+            .eq('id', id);
+
+        if (error) {
+            toast.error('Failed to update banner status.');
+        } else {
+            toast.success(`Banner ${!currentStatus ? 'activated' : 'deactivated'}!`);
+            fetchBanners();
+        }
+    };
+
+    const editBanner = (banner: PromotionalBanner) => {
+        setEditingBanner(banner);
+        setBannerForm({
+            title: banner.title,
+            description: banner.description || '',
+            image_url: banner.image_url,
+            offer_text: banner.offer_text || '',
+            display_order: banner.display_order.toString(),
+            valid_until: banner.valid_until ? new Date(banner.valid_until).toISOString().split('T')[0] : ''
+        });
+        setShowBannerForm(true);
+    };
+
     const handleCancelForm = () => {
         setShowMenuForm(false);
         setEditingItem(null);
@@ -464,6 +570,14 @@ const OwnerView: React.FC = () => {
                         >
                             🍽️ Menu
                         </button>
+                        <button
+                            onClick={() => setActiveTab('banners')}
+                            className={`px-4 py-2 rounded-lg font-semibold transition ${
+                                activeTab === 'banners' ? 'bg-orange-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            }`}
+                        >
+                            🎯 Banners
+                        </button>
                         <button onClick={signOut} className="text-gray-500 hover:text-orange-600 font-semibold">Logout</button>
                     </div>
                 </div>
@@ -491,7 +605,7 @@ const OwnerView: React.FC = () => {
                                 </div>
                             ))}
                         </motion.div>
-                    ) : (
+                    ) : activeTab === 'menu' ? (
                         <motion.div
                             key="menu"
                             initial={{ opacity: 0, y: 20 }}
@@ -706,6 +820,145 @@ const OwnerView: React.FC = () => {
                                         </div>
                                     ))
                                 )}
+                            </div>
+                        </motion.div>
+                    ) : (
+                        <motion.div
+                            key="banners"
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
+                            transition={{ duration: 0.2 }}
+                        >
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-2xl font-bold">Promotional Banners</h2>
+                                <button
+                                    onClick={() => setShowBannerForm(true)}
+                                    className="bg-orange-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-orange-700 transition"
+                                >
+                                    + Add Banner
+                                </button>
+                            </div>
+
+                            <AnimatePresence>
+                                {showBannerForm && (
+                                    <motion.div
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        exit={{ opacity: 0 }}
+                                        className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+                                        onClick={() => setShowBannerForm(false)}
+                                    >
+                                        <motion.div
+                                            initial={{ scale: 0.9, y: 20 }}
+                                            animate={{ scale: 1, y: 0 }}
+                                            exit={{ scale: 0.9, y: 20 }}
+                                            className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto"
+                                            onClick={(e) => e.stopPropagation()}
+                                        >
+                                            <h3 className="text-xl font-bold mb-4">
+                                                {editingBanner ? 'Edit Banner' : 'Add New Banner'}
+                                            </h3>
+                                            <form onSubmit={handleBannerSubmit} className="space-y-4">
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Title *</label>
+                                                    <input
+                                                        type="text"
+                                                        value={bannerForm.title}
+                                                        onChange={(e) => setBannerForm(prev => ({...prev, title: e.target.value}))}
+                                                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                                        required
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Image URL *</label>
+                                                    <input
+                                                        type="url"
+                                                        value={bannerForm.image_url}
+                                                        onChange={(e) => setBannerForm(prev => ({...prev, image_url: e.target.value}))}
+                                                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                                        required
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium text-gray-700 mb-1">Offer Text</label>
+                                                    <input
+                                                        type="text"
+                                                        value={bannerForm.offer_text}
+                                                        onChange={(e) => setBannerForm(prev => ({...prev, offer_text: e.target.value}))}
+                                                        placeholder="e.g., 20% OFF"
+                                                        className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                                                    />
+                                                </div>
+                                                <div className="flex gap-3 pt-4">
+                                                    <button
+                                                        type="submit"
+                                                        className="flex-1 bg-orange-600 text-white py-2 rounded-lg font-semibold hover:bg-orange-700 transition"
+                                                    >
+                                                        {editingBanner ? 'Update' : 'Create'} Banner
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowBannerForm(false)}
+                                                        className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-lg font-semibold hover:bg-gray-400 transition"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </motion.div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {banners.map(banner => (
+                                    <motion.div
+                                        key={banner.id}
+                                        layout
+                                        className="bg-white rounded-xl shadow-lg overflow-hidden"
+                                    >
+                                        <div className="relative">
+                                            <img
+                                                src={banner.image_url}
+                                                alt={banner.title}
+                                                className="w-full h-32 object-cover"
+                                            />
+                                            <div className="absolute top-2 right-2">
+                                                <button
+                                                    onClick={() => toggleBannerStatus(banner.id, banner.is_active)}
+                                                    className={`px-2 py-1 rounded-full text-xs font-bold ${
+                                                        banner.is_active ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+                                                    }`}
+                                                >
+                                                    {banner.is_active ? '✓ Active' : '✕ Inactive'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="p-4">
+                                            <h4 className="font-bold text-lg mb-1">{banner.title}</h4>
+                                            {banner.offer_text && (
+                                                <span className="inline-block bg-orange-500 text-white text-xs px-2 py-1 rounded mb-2">
+                                                    {banner.offer_text}
+                                                </span>
+                                            )}
+                                            <div className="flex gap-2 mt-3">
+                                                <button
+                                                    onClick={() => editBanner(banner)}
+                                                    className="flex-1 bg-blue-500 text-white py-2 rounded-md text-sm font-semibold hover:bg-blue-600 transition"
+                                                >
+                                                    Edit
+                                                </button>
+                                                <button
+                                                    onClick={() => deleteBanner(banner.id)}
+                                                    className="flex-1 bg-red-500 text-white py-2 rounded-md text-sm font-semibold hover:bg-red-600 transition"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </motion.div>
+                                ))}
                             </div>
                         </motion.div>
                     )}

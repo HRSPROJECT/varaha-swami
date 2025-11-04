@@ -102,3 +102,15 @@ export interface AuthContextType {
   loading: boolean;
   signOut: () => Promise<void>;
 }
+
+export interface PromotionalBanner {
+  id: number;
+  created_at: string;
+  title: string;
+  description: string | null;
+  image_url: string;
+  is_active: boolean;
+  display_order: number;
+  offer_text: string | null;
+  valid_until: string | null;
+}

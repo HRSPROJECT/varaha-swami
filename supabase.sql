@@ -86,6 +86,19 @@ CREATE TABLE order_items (
   price DECIMAL(10, 2) NOT NULL CHECK (price >= 0)
 );
 
+-- Promotional banners table
+CREATE TABLE promotional_banners (
+  id BIGSERIAL PRIMARY KEY,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  title TEXT NOT NULL,
+  description TEXT,
+  image_url TEXT NOT NULL,
+  is_active BOOLEAN DEFAULT true,
+  display_order INTEGER DEFAULT 0,
+  offer_text TEXT,
+  valid_until TIMESTAMP WITH TIME ZONE
+);
+
 -- =====================================================
 -- INDEXES
 -- =====================================================
@@ -99,6 +112,7 @@ CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
 CREATE INDEX idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX idx_order_items_menu_item_id ON order_items(menu_item_id);
 CREATE INDEX idx_menu_items_is_available ON menu_items(is_available);
+CREATE INDEX idx_promotional_banners_active ON promotional_banners(is_active, display_order);
 
 -- =====================================================
 -- FUNCTIONS (Create before RLS policies)
@@ -167,6 +181,7 @@ ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE menu_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE promotional_banners ENABLE ROW LEVEL SECURITY;
 
 -- Profiles policies
 CREATE POLICY "Public profiles are viewable by everyone"
@@ -343,6 +358,21 @@ GRANT SELECT ON orders_with_details TO authenticated;
 -- CREATE POLICY "Owners can upload images" ON storage.objects FOR INSERT 
 --   WITH CHECK (bucket_id = 'menu-images' AND 
 --     EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.user_type = 'owner'));
+
+-- Promotional banners policies
+CREATE POLICY "Active banners are viewable by everyone"
+  ON promotional_banners FOR SELECT
+  USING (is_active = true);
+
+CREATE POLICY "Only owners can manage banners"
+  ON promotional_banners FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM profiles
+      WHERE profiles.id = auth.uid()
+      AND profiles.user_type = 'owner'
+    )
+  );
 
 -- =====================================================
 -- CLEANUP (uncomment if you need to reset the database)

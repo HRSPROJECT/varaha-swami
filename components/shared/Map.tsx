@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -12,6 +12,7 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
+// Memoize icon creation for performance
 const createDivIcon = (icon: React.ReactElement) => {
   return new L.DivIcon({
     html: renderToStaticMarkup(icon),
@@ -30,52 +31,61 @@ interface MapProps {
   restaurantLoc: { lat: number; lon: number };
   customerLoc: { lat: number; lon: number };
   deliveryLoc?: { lat: number; lon: number } | null;
-  routePath?: Array<[number, number]> | null; // Add route geometry from API
-  distance?: number | null; // Distance in km
-  duration?: number | null; // Duration in minutes
+  routePath?: Array<[number, number]> | null;
+  distance?: number | null;
+  duration?: number | null;
 }
 
 const Map: React.FC<MapProps> = ({ restaurantLoc, customerLoc, deliveryLoc, routePath, distance, duration }) => {
-    const allPoints: L.LatLngExpression[] = [
-        [restaurantLoc.lat, restaurantLoc.lon],
-        [customerLoc.lat, customerLoc.lon],
-    ];
-    if (deliveryLoc) {
-        allPoints.push([deliveryLoc.lat, deliveryLoc.lon]);
-    }
-    const bounds = L.latLngBounds(allPoints);
+    // Memoize bounds calculation for performance
+    const bounds = useMemo(() => {
+        const allPoints: L.LatLngExpression[] = [
+            [restaurantLoc.lat, restaurantLoc.lon],
+            [customerLoc.lat, customerLoc.lon],
+        ];
+        if (deliveryLoc) {
+            allPoints.push([deliveryLoc.lat, deliveryLoc.lon]);
+        }
+        return L.latLngBounds(allPoints);
+    }, [restaurantLoc, customerLoc, deliveryLoc]);
 
     return (
         <MapContainer
             bounds={bounds}
-            boundsOptions={{ padding: [50, 50] }}
+            boundsOptions={{ padding: [20, 20] }}
             scrollWheelZoom={true}
             style={{ height: '100%', width: '100%', borderRadius: '1rem' }}
+            preferCanvas={true}
+            zoomControl={false}
         >
             <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                maxZoom={18}
+                tileSize={256}
+                updateWhenIdle={true}
+                keepBuffer={2}
             />
             
-            {/* Draw the route path from OpenRouteService API */}
+            {/* Draw the route path */}
             {routePath && routePath.length > 0 && (
                 <Polyline 
                     positions={routePath} 
                     color="#FF6B35" 
-                    weight={5}
-                    opacity={0.7}
-                    dashArray="10, 5"
+                    weight={4}
+                    opacity={0.8}
+                    smoothFactor={1}
                 />
             )}
             
             <Marker position={[restaurantLoc.lat, restaurantLoc.lon]} icon={restaurantIcon}>
                 <Popup>
                     <div className="text-center">
-                        <strong>🍽️ Varaha Swami Restaurant</strong>
+                        <strong>🍽️ Varaha Swami</strong>
                         {distance && duration && (
                             <p className="text-sm mt-1">
-                                📍 {distance < 1 ? `${(distance * 1000).toFixed(0)}m` : `${distance.toFixed(1)}km`} away<br/>
-                                ⏱️ ~{duration} min drive
+                                📍 {distance < 1 ? `${(distance * 1000).toFixed(0)}m` : `${distance.toFixed(1)}km`}<br/>
+                                ⏱️ ~{duration} min
                             </p>
                         )}
                     </div>
@@ -83,27 +93,18 @@ const Map: React.FC<MapProps> = ({ restaurantLoc, customerLoc, deliveryLoc, rout
             </Marker>
             
             <Marker position={[customerLoc.lat, customerLoc.lon]} icon={customerIcon}>
-                <Popup>
-                    <div className="text-center">
-                        <strong>📍 Your Location</strong>
-                    </div>
-                </Popup>
+                <Popup>📍 Your Location</Popup>
             </Marker>
             
             {deliveryLoc && (
                 <>
                     <Marker position={[deliveryLoc.lat, deliveryLoc.lon]} icon={deliveryIcon}>
-                        <Popup>
-                            <div className="text-center">
-                                <strong>🛵 Delivery Partner</strong>
-                                <p className="text-sm">On the way!</p>
-                            </div>
-                        </Popup>
+                        <Popup>🛵 Delivery Partner</Popup>
                     </Marker>
                     <Polyline 
                         positions={[[deliveryLoc.lat, deliveryLoc.lon], [customerLoc.lat, customerLoc.lon]]} 
                         color="blue" 
-                        weight={4}
+                        weight={3}
                         dashArray="5, 10" 
                     />
                 </>
@@ -111,5 +112,6 @@ const Map: React.FC<MapProps> = ({ restaurantLoc, customerLoc, deliveryLoc, rout
         </MapContainer>
     );
 };
+
 
 export default Map;
