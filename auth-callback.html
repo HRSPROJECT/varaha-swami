@@ -55,7 +55,16 @@
 
         async function handleAuthCallback() {
             try {
+                console.log('Processing OAuth callback...');
+                console.log('Current URL:', window.location.href);
+                console.log('URL hash:', window.location.hash);
+                console.log('URL search:', window.location.search);
+                
+                // Get session from Supabase
                 const { data, error } = await supabase.auth.getSession();
+                
+                console.log('Session data:', data);
+                console.log('Session error:', error);
                 
                 if (error) {
                     console.error('Auth error:', error);
@@ -64,19 +73,28 @@
                 }
 
                 if (data.session) {
+                    console.log('Session found:', data.session);
+                    
                     // Check if this is from mobile app
                     const isAndroidApp = navigator.userAgent.includes('wv') || navigator.userAgent.includes('Android');
+                    console.log('Is Android app:', isAndroidApp);
                     
                     if (isAndroidApp) {
-                        // Redirect to custom scheme to return to app
+                        // Pass session tokens to app
+                        const accessToken = data.session.access_token;
+                        const refreshToken = data.session.refresh_token;
+                        
+                        console.log('Redirecting to app with tokens');
+                        // Redirect to custom scheme with tokens
                         setTimeout(() => {
-                            window.location.href = 'varahaswami://oauth/success';
+                            window.location.href = `varahaswami://oauth/success?access_token=${accessToken}&refresh_token=${refreshToken}`;
                         }, 1000);
                     } else {
                         // Regular web browser
                         window.location.href = '/';
                     }
                 } else {
+                    console.log('No session found, redirecting to home');
                     // No session, redirect to login
                     window.location.href = '/';
                 }
