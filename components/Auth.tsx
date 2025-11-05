@@ -228,7 +228,7 @@ const Auth: React.FC = () => {
           className="w-full inline-flex justify-center items-center py-3 px-4 border border-gray-300 rounded-lg shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:bg-gray-200 transition-all"
         >
           <GoogleIcon className="w-5 h-5 mr-3" />
-          Sign in with Google
+          {(window as any).isAndroidApp ? 'Sign in with Google (Native)' : 'Sign in with Google'}
         </button>
         
         <p className="text-sm text-center text-gray-600">
