@@ -39,6 +39,12 @@ export default defineConfig(({ mode }) => {
         target: 'esnext',
         commonjsOptions: {
           transformMixedEsModules: true
+        },
+        rollupOptions: {
+          input: {
+            main: './index.html',
+            callback: './auth-callback.html'
+          }
         }
       }
     };
