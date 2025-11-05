@@ -65,12 +65,12 @@
 
                 if (data.session) {
                     // Check if this is from mobile app
-                    const isAndroidApp = window.isAndroidApp || navigator.userAgent.includes('wv');
+                    const isAndroidApp = navigator.userAgent.includes('wv') || navigator.userAgent.includes('Android');
                     
                     if (isAndroidApp) {
-                        // In WebView - redirect back to main page
+                        // Redirect to custom scheme to return to app
                         setTimeout(() => {
-                            window.location.href = '/';
+                            window.location.href = 'varahaswami://oauth/success';
                         }, 1000);
                     } else {
                         // Regular web browser
