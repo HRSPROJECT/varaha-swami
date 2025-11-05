@@ -109,10 +109,17 @@ const Auth: React.FC = () => {
   
   const handleGoogleLogin = async () => {
     setLoading(true);
+    
+    // Detect if running in Android app
+    const isAndroidApp = window.isAndroidApp || navigator.userAgent.includes('wv');
+    const redirectUrl = isAndroidApp 
+      ? 'varahaswami://oauth/callback'
+      : `${window.location.origin}/auth/callback`;
+    
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`
+        redirectTo: redirectUrl
       }
     });
     if (error) {
