@@ -111,7 +111,7 @@ const Auth: React.FC = () => {
     setLoading(true);
     
     // Detect if running in Android app
-    const isAndroidApp = window.isAndroidApp || navigator.userAgent.includes('wv');
+    const isAndroidApp = (window as any).isAndroidApp || navigator.userAgent.includes('wv');
     const redirectUrl = isAndroidApp 
       ? 'varahaswami://oauth/callback'
       : `${window.location.origin}/auth/callback`;
