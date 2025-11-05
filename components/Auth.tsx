@@ -110,7 +110,7 @@ const Auth: React.FC = () => {
   const handleGoogleLogin = async () => {
     setLoading(true);
     
-    // Always use website callback - let OAuth complete in Chrome
+    // Use regular website callback - everything stays in WebView
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
